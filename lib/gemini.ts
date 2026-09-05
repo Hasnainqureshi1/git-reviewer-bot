@@ -17,7 +17,7 @@ async function generateWithRetry(ai: GoogleGenAI, contents: string): Promise<str
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
+        model: process.env.GEMINI_MODEL?.trim() || "gemini-3.7-flash",
         contents,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
