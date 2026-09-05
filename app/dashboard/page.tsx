@@ -1,10 +1,11 @@
-import { AlertTriangle, Bot, CheckCircle2, Clock3, ExternalLink, GitPullRequest } from "lucide-react";
+import { AlertTriangle, CheckCircle2, GitPullRequest, Send } from "lucide-react";
 import Image from "next/image";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
 import { Brand } from "@/components/brand";
 import { RepoManager } from "@/components/repo-manager";
+import { ReviewHistory } from "@/components/review-history";
 import { SignOutButton } from "@/components/sign-out-button";
 import { authOptions } from "@/lib/auth";
 import { getConnectedRepos, getGitHubTokenForUser, getRecentReviews } from "@/lib/database";
@@ -13,21 +14,6 @@ import type { ConnectedRepo, GitHubRepository, ReviewRecord } from "@/types";
 
 export const metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-const statusStyle = {
-  completed: { label: "Completed", icon: CheckCircle2, className: "text-emerald-300 bg-emerald-300/10" },
-  pending: { label: "Reviewing", icon: Clock3, className: "text-amber-300 bg-amber-300/10" },
-  failed: { label: "Failed", icon: AlertTriangle, className: "text-red-300 bg-red-300/10" },
-};
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
@@ -52,8 +38,12 @@ export default async function DashboardPage() {
     loadError = error instanceof Error ? error.message : "Dashboard data could not be loaded";
   }
 
-  const completed = reviews.filter((review) => review.status === "completed").length;
-  const pending = reviews.filter((review) => review.status === "pending").length;
+  const awaitingApproval = reviews.filter(
+    (review) => review.status === "completed" && !review.comment_url,
+  ).length;
+  const published = reviews.filter(
+    (review) => review.status === "completed" && Boolean(review.comment_url),
+  ).length;
 
   return (
     <main className="min-h-screen pb-16">
@@ -109,8 +99,8 @@ export default async function DashboardPage() {
         <section className="mt-8 grid gap-4 sm:grid-cols-3">
           {[
             ["Repositories", connected.length, GitPullRequest, "Connected to GitHub"],
-            ["Completed", completed, CheckCircle2, "Recent AI reviews"],
-            ["In progress", pending, Clock3, "Currently processing"],
+            ["Awaiting approval", awaitingApproval, Send, "Ready for your decision"],
+            ["Published", published, CheckCircle2, "Posted to GitHub"],
           ].map(([label, value, Icon, note]) => {
             const StatIcon = Icon as typeof GitPullRequest;
             return (
@@ -133,66 +123,7 @@ export default async function DashboardPage() {
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(340px,.9fr)]">
           <RepoManager initialConnected={connected} repositories={repositories} />
 
-          <section className="panel overflow-hidden rounded-2xl">
-            <div className="border-b border-white/[0.07] px-5 py-5 sm:px-6">
-              <h2 className="font-medium text-white">Recent reviews</h2>
-              <p className="mt-1 text-xs text-slate-500">The latest 25 pull request events.</p>
-            </div>
-            <div className="max-h-[545px] divide-y divide-white/[0.06] overflow-y-auto">
-              {reviews.length === 0 ? (
-                <div className="px-6 py-14 text-center">
-                  <div className="mx-auto grid size-12 place-items-center rounded-2xl border border-dashed border-white/10 text-slate-600">
-                    <Bot size={21} />
-                  </div>
-                  <p className="mt-4 text-sm font-medium text-slate-300">No reviews yet</p>
-                  <p className="mt-1 text-xs text-slate-600">Open a PR in a connected repository to begin.</p>
-                </div>
-              ) : (
-                reviews.map((review) => {
-                  const status = statusStyle[review.status];
-                  const StatusIcon = status.icon;
-                  return (
-                    <article key={review.id} className="px-5 py-4 sm:px-6">
-                      <div className="flex items-start gap-3">
-                        <span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${status.className}`}>
-                          <StatusIcon size={15} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-3">
-                            <a
-                              href={review.pr_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="line-clamp-2 text-sm font-medium leading-5 text-slate-200 transition hover:text-emerald-300"
-                            >
-                              {review.pr_title}
-                            </a>
-                            {review.comment_url && (
-                              <a
-                                href={review.comment_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                aria-label="Open review comment"
-                                className="shrink-0 text-slate-600 transition hover:text-white"
-                              >
-                                <ExternalLink size={14} />
-                              </a>
-                            )}
-                          </div>
-                          <p className="mt-1 truncate text-xs text-slate-600">
-                            {review.repos?.full_name} #{review.pr_number} · {formatDate(review.created_at)}
-                          </p>
-                          {review.status === "failed" && review.error_message && (
-                            <p className="mt-2 line-clamp-2 text-xs leading-5 text-red-300/70">{review.error_message}</p>
-                          )}
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </section>
+          <ReviewHistory initialReviews={reviews} />
         </div>
       </div>
     </main>
