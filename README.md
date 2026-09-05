@@ -51,6 +51,8 @@ Copy the client ID and client secret into `.env.local`. The requested OAuth scop
 
 GitHub cannot deliver webhooks to localhost. For a real local PR test, expose port 3000 through an HTTPS tunnel and set `NEXTAUTH_URL` to that public origin before connecting the repository. Reconnect after changing the URL so the webhook configuration is updated.
 
+Alternatively, keep `NEXTAUTH_URL=http://localhost:3000` for local OAuth and set `GITHUB_WEBHOOK_URL=https://your-public-domain/api/webhook/github`. When using the production Vercel endpoint this way, local and production must use the same Supabase project, `GITHUB_WEBHOOK_SECRET`, and `TOKEN_ENCRYPTION_KEY` so production can decrypt the stored GitHub token.
+
 ## 4. Add Gemini
 
 Create an API key in Google AI Studio and set `GEMINI_API_KEY`. The default model is `gemini-3.7-flash`; override `GEMINI_MODEL` if that model is unavailable for your account or region.

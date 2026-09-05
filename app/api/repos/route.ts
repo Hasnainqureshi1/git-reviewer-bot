@@ -58,7 +58,17 @@ export async function POST(request: Request) {
       return Response.json({ error: "GitHub admin access is required to create a webhook" }, { status: 403 });
     }
 
-    const callbackUrl = new URL("/api/webhook/github", requireEnv("NEXTAUTH_URL")).toString();
+    const callbackUrl = process.env.GITHUB_WEBHOOK_URL
+      ? new URL(process.env.GITHUB_WEBHOOK_URL).toString()
+      : new URL("/api/webhook/github", requireEnv("NEXTAUTH_URL")).toString();
+
+    if (new URL(callbackUrl).hostname === "localhost") {
+      return Response.json(
+        { error: "GitHub cannot deliver webhooks to localhost. Set GITHUB_WEBHOOK_URL to a public HTTPS endpoint." },
+        { status: 400 },
+      );
+    }
+
     const webhookId = await createOrUpdateWebhook(
       repository.owner.login,
       repository.name,

@@ -33,8 +33,15 @@ async function githubRequest<T>(
   if (!response.ok) {
     let detail = response.statusText;
     try {
-      const body = (await response.json()) as { message?: string };
-      detail = body.message ?? detail;
+      const body = (await response.json()) as {
+        message?: string;
+        errors?: Array<{ message?: string; field?: string; code?: string }>;
+      };
+      const validationDetails = body.errors
+        ?.map((error) => error.message ?? [error.field, error.code].filter(Boolean).join(" "))
+        .filter(Boolean)
+        .join("; ");
+      detail = [body.message ?? detail, validationDetails].filter(Boolean).join(": ");
     } catch {
       // GitHub occasionally returns an empty or non-JSON error body.
     }
