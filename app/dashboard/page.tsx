@@ -10,6 +10,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 import { authOptions } from "@/lib/auth";
 import { getConnectedRepos, getGitHubTokenForUser, getRecentReviews } from "@/lib/database";
 import { listGitHubRepositories } from "@/lib/github";
+import { latestReviewAttempts } from "@/lib/reviews";
 import type { ConnectedRepo, GitHubRepository, ReviewRecord } from "@/types";
 
 export const metadata = { title: "Dashboard" };
@@ -35,13 +36,15 @@ export default async function DashboardPage() {
     repositories = await listGitHubRepositories(token);
   } catch (error) {
     console.error("Dashboard data failed to load", error);
-    loadError = error instanceof Error ? error.message : "Dashboard data could not be loaded";
+    loadError = "Dashboard data could not be loaded. Please refresh and try again.";
   }
 
-  const awaitingApproval = reviews.filter(
+  const latestReviews = latestReviewAttempts(reviews);
+
+  const awaitingApproval = latestReviews.filter(
     (review) => review.status === "completed" && !review.comment_url,
   ).length;
-  const published = reviews.filter(
+  const published = latestReviews.filter(
     (review) => review.status === "completed" && Boolean(review.comment_url),
   ).length;
 
@@ -120,10 +123,10 @@ export default async function DashboardPage() {
           })}
         </section>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(340px,.9fr)]">
+        <div className="mt-6 grid items-start gap-6 xl:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)]">
           <RepoManager initialConnected={connected} repositories={repositories} />
 
-          <ReviewHistory initialReviews={reviews} />
+          <ReviewHistory initialReviews={latestReviews} />
         </div>
       </div>
     </main>

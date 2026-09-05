@@ -218,6 +218,25 @@ export async function getReviewForPublishing(
   };
 }
 
+export async function resetFailedReview(reviewId: string): Promise<boolean> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("reviews")
+    .update({
+      status: "pending",
+      ai_response: null,
+      comment_url: null,
+      error_message: null,
+      completed_at: null,
+    })
+    .eq("id", reviewId)
+    .eq("status", "failed")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error(`Could not retry review: ${error.message}`);
+  return Boolean(data);
+}
+
 export async function markReviewPublished(reviewId: string, commentUrl: string): Promise<void> {
   const { error } = await getSupabaseAdmin()
     .from("reviews")

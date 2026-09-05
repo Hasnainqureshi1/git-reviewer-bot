@@ -14,7 +14,7 @@ If there are no actionable findings, say: "No actionable issues found in this di
 async function generateWithRetry(ai: GoogleGenAI, contents: string): Promise<string> {
   let lastError: unknown;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await ai.models.generateContent({
         model: process.env.GEMINI_MODEL?.trim() || "gemini-3.7-flash",
@@ -29,7 +29,10 @@ async function generateWithRetry(ai: GoogleGenAI, contents: string): Promise<str
       return text;
     } catch (error) {
       lastError = error;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 750));
+      if (attempt < 2) {
+        const delay = 1_000 * 2 ** attempt;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
   }
 
