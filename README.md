@@ -12,6 +12,12 @@ AI PR Reviewer connects to GitHub repositories, receives signed pull request web
 - Gemini retry handling and GitHub rate-limit feedback
 - Supabase schema with RLS denying direct client access
 - Responsive findings dashboard with manual GitHub publishing
+- Structured finding cards with edit, dismiss, severity filters, and code fixes
+- Inline GitHub review comments with a safe summary fallback
+- Per-repository focus, severity, ignored paths, and merge-status settings
+- GitHub App installation-token and Checks API support with OAuth fallback
+- Daily usage limits, audit events, account deletion, and a privacy page
+- Database-backed recovery jobs with a protected cron endpoint
 - Unit tests for signature verification and diff chunking
 
 ## 1. Install and configure
@@ -34,7 +40,10 @@ Generate a separate high-entropy value for `GITHUB_WEBHOOK_SECRET`. Never commit
 
 ## 2. Create the Supabase schema
 
-Create a Supabase project, open its SQL editor, and run [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql).
+Create a Supabase project, open its SQL editor, and run these files in order:
+
+1. [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql)
+2. [`supabase/migrations/002_product_features.sql`](supabase/migrations/002_product_features.sql)
 
 Copy the project URL and service-role key into `.env.local`. The service-role key is deliberately not prefixed with `NEXT_PUBLIC_`; it must only exist on the server. RLS is enabled without browser-facing policies because NextAuth, rather than Supabase Auth, owns the user session.
 
@@ -81,6 +90,22 @@ npm run build
 3. Set `NEXTAUTH_URL` to the production HTTPS origin, without a trailing path.
 4. Change the OAuth App homepage and callback URL to production (`https://your-domain/api/auth/callback/github`).
 5. Deploy, sign in, and connect the test repository from the production dashboard.
+6. Set `CRON_SECRET` to a random value so the recovery job can run.
+
+The Vercel schedule runs once per day because Hobby projects do not support more frequent cron jobs. Webhooks still start reviews immediately. On a paid plan, change the schedule in `vercel.json` to every five minutes for faster recovery.
+
+## Optional GitHub App migration
+
+OAuth remains supported. For fine-grained repository access and GitHub check annotations, create a GitHub App and add `GITHUB_APP_ID`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `GITHUB_APP_PRIVATE_KEY`.
+
+Give the GitHub App these repository permissions:
+
+- Contents: read
+- Metadata: read
+- Pull requests: write
+- Checks: write
+
+Subscribe it to pull request events and set its webhook URL to `/api/webhook/github`. Install the app on the repositories you want to review, then reconnect them from the dashboard.
 
 The webhook route acknowledges accepted events with HTTP 202 and uses Next.js `after()` for work that continues after the response. `maxDuration` is set to 60 seconds. For high-volume or very large production workloads, replace this in-process background work with a durable queue and a worker.
 

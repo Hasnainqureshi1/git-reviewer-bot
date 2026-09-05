@@ -1,6 +1,8 @@
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
+import { getInstallationAccessToken } from "@/lib/github-app";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import type { ConnectedRepo, GitHubRepository, ReviewRecord } from "@/types";
+import type { RepoSettings, ReviewMode } from "@/types";
 
 export async function upsertGitHubUser(input: {
   githubId: number;
@@ -60,7 +62,8 @@ export async function getConnectedRepos(userId: string): Promise<ConnectedRepo[]
 export async function connectRepository(
   userId: string,
   repository: GitHubRepository,
-  webhookId: number,
+  webhookId: number | null,
+  installationId?: number | null,
 ): Promise<ConnectedRepo> {
   const admin = getSupabaseAdmin();
   const { data: existing, error: findError } = await admin
@@ -83,6 +86,7 @@ export async function connectRepository(
     default_branch: repository.default_branch,
     webhook_id: webhookId,
     webhook_active: true,
+    ...(installationId ? { github_installation_id: installationId } : {}),
     updated_at: new Date().toISOString(),
   };
 
@@ -135,6 +139,7 @@ export async function getRecentReviews(userId: string): Promise<ReviewRecord[]> 
 export async function findWebhookRepository(githubRepoId: number): Promise<{
   repo: ConnectedRepo;
   accessToken: string;
+  usesGitHubApp: boolean;
 } | null> {
   const { data: repo, error } = await getSupabaseAdmin()
     .from("repos")
@@ -148,7 +153,10 @@ export async function findWebhookRepository(githubRepoId: number): Promise<{
 
   return {
     repo: repo as ConnectedRepo,
-    accessToken: await getGitHubTokenForUser(repo.user_id),
+    accessToken: repo.github_installation_id
+      ? await getInstallationAccessToken(repo.github_installation_id)
+      : await getGitHubTokenForUser(repo.user_id),
+    usesGitHubApp: Boolean(repo.github_installation_id),
   };
 }
 
@@ -158,30 +166,52 @@ export async function createPendingReview(input: {
   prNumber: number;
   prTitle: string;
   prUrl: string;
+  headSha?: string;
+  reviewMode?: ReviewMode;
 }): Promise<string | null> {
-  const { data, error } = await getSupabaseAdmin()
+  const enhancedRecord = {
+    repo_id: input.repoId,
+    github_delivery_id: input.deliveryId,
+    pr_number: input.prNumber,
+    pr_title: input.prTitle,
+    pr_url: input.prUrl,
+    status: "pending",
+    head_sha: input.headSha ?? null,
+    review_mode: input.reviewMode ?? "balanced",
+  };
+  let { data, error } = await getSupabaseAdmin()
     .from("reviews")
-    .insert({
-      repo_id: input.repoId,
-      github_delivery_id: input.deliveryId,
-      pr_number: input.prNumber,
-      pr_title: input.prTitle,
-      pr_url: input.prUrl,
-      status: "pending",
-    })
+    .insert(enhancedRecord)
     .select("id")
     .single();
 
+  if (error && /head_sha|review_mode|schema cache/i.test(error.message)) {
+    ({ data, error } = await getSupabaseAdmin()
+      .from("reviews")
+      .insert({
+        repo_id: input.repoId,
+        github_delivery_id: input.deliveryId,
+        pr_number: input.prNumber,
+        pr_title: input.prTitle,
+        pr_url: input.prUrl,
+        status: "pending",
+      })
+      .select("id")
+      .single());
+  }
+
   if (error?.code === "23505") return null;
   if (error) throw new Error(`Could not create review record: ${error.message}`);
+  if (!data) throw new Error("Could not create review record");
   return data.id as string;
 }
 
 export async function completeReview(
   reviewId: string,
   aiResponse: string,
+  usage?: { inputCharacters: number; outputCharacters: number },
 ): Promise<void> {
-  const { error } = await getSupabaseAdmin()
+  let { error } = await getSupabaseAdmin()
     .from("reviews")
     .update({
       status: "completed",
@@ -189,8 +219,23 @@ export async function completeReview(
       comment_url: null,
       error_message: null,
       completed_at: new Date().toISOString(),
+      input_characters: usage?.inputCharacters ?? 0,
+      output_characters: usage?.outputCharacters ?? aiResponse.length,
     })
     .eq("id", reviewId);
+
+  if (error && /input_characters|output_characters|schema cache/i.test(error.message)) {
+    ({ error } = await getSupabaseAdmin()
+      .from("reviews")
+      .update({
+        status: "completed",
+        ai_response: aiResponse,
+        comment_url: null,
+        error_message: null,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", reviewId));
+  }
 
   if (error) throw new Error(`Could not complete review record: ${error.message}`);
 }
@@ -214,11 +259,13 @@ export async function getReviewForPublishing(
   return {
     review: review as ReviewRecord,
     repo,
-    accessToken: await getGitHubTokenForUser(userId),
+    accessToken: repo.github_installation_id
+      ? await getInstallationAccessToken(repo.github_installation_id)
+      : await getGitHubTokenForUser(userId),
   };
 }
 
-export async function resetFailedReview(reviewId: string): Promise<boolean> {
+export async function resetReviewForProcessing(reviewId: string): Promise<boolean> {
   const { data, error } = await getSupabaseAdmin()
     .from("reviews")
     .update({
@@ -229,12 +276,158 @@ export async function resetFailedReview(reviewId: string): Promise<boolean> {
       completed_at: null,
     })
     .eq("id", reviewId)
-    .eq("status", "failed")
+    .neq("status", "pending")
+    .is("comment_url", null)
     .select("id")
     .maybeSingle();
 
   if (error) throw new Error(`Could not retry review: ${error.message}`);
   return Boolean(data);
+}
+
+export async function updateRepoSettings(
+  repoId: string,
+  userId: string,
+  settings: RepoSettings,
+): Promise<ConnectedRepo> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("repos")
+    .update({ ...settings, updated_at: new Date().toISOString() })
+    .eq("id", repoId)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+
+  if (error) throw new Error(`Could not save repository settings: ${error.message}`);
+  return data as ConnectedRepo;
+}
+
+export async function countReviewsSince(userId: string, since: string): Promise<number> {
+  const { count, error } = await getSupabaseAdmin()
+    .from("reviews")
+    .select("id, repos!inner(user_id)", { count: "exact", head: true })
+    .eq("repos.user_id", userId)
+    .gte("created_at", since);
+
+  if (error) throw new Error(`Could not load review usage: ${error.message}`);
+  return count ?? 0;
+}
+
+export async function getReviewUsageSince(userId: string, since: string): Promise<{
+  reviews: number;
+  estimatedTokens: number;
+}> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("reviews")
+    .select("input_characters, output_characters, repos!inner(user_id)")
+    .eq("repos.user_id", userId)
+    .gte("created_at", since);
+
+  if (error && /input_characters|output_characters|schema cache/i.test(error.message)) {
+    return { reviews: await countReviewsSince(userId, since), estimatedTokens: 0 };
+  }
+  if (error) throw new Error(`Could not load review usage: ${error.message}`);
+  const characters = (data ?? []).reduce(
+    (total, item) => total + Number(item.input_characters ?? 0) + Number(item.output_characters ?? 0),
+    0,
+  );
+  return { reviews: data?.length ?? 0, estimatedTokens: Math.ceil(characters / 4) };
+}
+
+export async function logAuditEvent(input: {
+  userId?: string | null;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("audit_logs").insert({
+    user_id: input.userId ?? null,
+    action: input.action,
+    target_type: input.targetType,
+    target_id: input.targetId ?? null,
+    metadata: input.metadata ?? {},
+  });
+
+  if (error && !/audit_logs|schema cache|does not exist/i.test(error.message)) {
+    console.error("Could not write audit log", error);
+  }
+}
+
+export async function deleteUserAccount(userId: string): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("users").delete().eq("id", userId);
+  if (error) throw new Error(`Could not delete account: ${error.message}`);
+}
+
+export async function startReviewJob(reviewId: string): Promise<boolean> {
+  const { error } = await getSupabaseAdmin().from("review_jobs").upsert(
+    {
+      review_id: reviewId,
+      status: "processing",
+      attempt_count: 1,
+      processing_started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "review_id" },
+  );
+
+  if (error && /review_jobs|schema cache|does not exist/i.test(error.message)) return false;
+  if (error) throw new Error(`Could not start review job: ${error.message}`);
+  return true;
+}
+
+export async function finishReviewJob(
+  reviewId: string,
+  status: "completed" | "failed",
+  errorMessage?: string,
+): Promise<void> {
+  const nextAttempt = new Date(Date.now() + 2 * 60 * 1_000).toISOString();
+  const { error } = await getSupabaseAdmin()
+    .from("review_jobs")
+    .update({
+      status,
+      last_error: errorMessage?.slice(0, 1_000) ?? null,
+      next_attempt_at: nextAttempt,
+      processing_started_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("review_id", reviewId);
+
+  if (error && !/review_jobs|schema cache|does not exist/i.test(error.message)) {
+    console.error("Could not finish review job", error);
+  }
+}
+
+export async function claimReviewJobs(limit = 5): Promise<Array<{ review_id: string }>> {
+  const { data, error } = await getSupabaseAdmin().rpc("claim_review_jobs", {
+    batch_size: Math.max(1, Math.min(limit, 10)),
+  });
+  if (error && /claim_review_jobs|schema cache|does not exist/i.test(error.message)) return [];
+  if (error) throw new Error(`Could not claim review jobs: ${error.message}`);
+  return (data ?? []) as Array<{ review_id: string }>;
+}
+
+export async function getReviewJobContext(reviewId: string): Promise<{
+  review: ReviewRecord;
+  repo: ConnectedRepo;
+  accessToken: string;
+} | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("reviews")
+    .select("*, repos!inner(*)")
+    .eq("id", reviewId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load review job: ${error.message}`);
+  if (!data) return null;
+
+  const review = data as unknown as ReviewRecord & { repos: ConnectedRepo };
+  return {
+    review,
+    repo: review.repos,
+    accessToken: review.repos.github_installation_id
+      ? await getInstallationAccessToken(review.repos.github_installation_id)
+      : await getGitHubTokenForUser(review.repos.user_id),
+  };
 }
 
 export async function markReviewPublished(reviewId: string, commentUrl: string): Promise<void> {

@@ -7,6 +7,31 @@ export interface DiffChunks {
   originalCharacters: number;
 }
 
+function globToRegExp(pattern: string): RegExp {
+  const escaped = pattern
+    .split("**")
+    .map((part) => part
+      .replace(/[.+^$(){}|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "."))
+    .join(".*");
+  return new RegExp(`^${escaped}$`, "i");
+}
+
+export function filterIgnoredPaths(diff: string, ignoredPaths: string[]): string {
+  const patterns = ignoredPaths.map((pattern) => pattern.trim()).filter(Boolean).map(globToRegExp);
+  if (patterns.length === 0) return diff;
+
+  return diff
+    .split(/(?=^diff --git )/m)
+    .filter((section) => {
+      const match = section.match(/^diff --git a\/(.+?) b\/(.+?)$/m);
+      const path = match?.[2];
+      return !path || !patterns.some((pattern) => pattern.test(path));
+    })
+    .join("");
+}
+
 export function chunkDiff(
   diff: string,
   maxCharacters = DEFAULT_MAX_SIZE,

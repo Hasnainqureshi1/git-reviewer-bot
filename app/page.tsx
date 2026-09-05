@@ -125,6 +125,9 @@ export default async function HomePage() {
           </div>
         </div>
       </section>
+      <footer className="relative z-10 border-t border-white/[0.07] px-6 py-6 text-center text-xs text-slate-600">
+        <Link href="/privacy" className="transition hover:text-slate-300">Privacy and data controls</Link>
+      </footer>
     </main>
   );
 }

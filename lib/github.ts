@@ -1,4 +1,5 @@
 import type { GitHubRepository } from "@/types";
+import type { StructuredReview } from "@/types";
 
 const API_ROOT = "https://api.github.com";
 
@@ -176,4 +177,159 @@ export async function postPullRequestComment(
   );
 
   return response.html_url;
+}
+
+export interface InlineReviewComment {
+  path: string;
+  line: number;
+  body: string;
+}
+
+export async function postPullRequestReview(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  accessToken: string,
+  body: string,
+  comments: InlineReviewComment[],
+): Promise<string> {
+  const response = await githubRequest<{ html_url: string }>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pullNumber}/reviews`,
+    accessToken,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        body: body.slice(0, 60_000),
+        event: "COMMENT",
+        comments: comments.slice(0, 50).map((comment) => ({
+          path: comment.path,
+          line: comment.line,
+          side: "RIGHT",
+          body: comment.body.slice(0, 60_000),
+        })),
+      }),
+    },
+  );
+
+  return response.html_url;
+}
+
+export async function setCommitStatus(
+  owner: string,
+  repo: string,
+  sha: string,
+  accessToken: string,
+  input: { state: "pending" | "success" | "failure" | "error"; description: string },
+): Promise<void> {
+  await githubRequest(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(sha)}`,
+    accessToken,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        state: input.state,
+        description: input.description.slice(0, 140),
+        context: "AI PR Reviewer",
+        target_url: process.env.NEXTAUTH_URL
+          ? new URL("/dashboard", process.env.NEXTAUTH_URL).toString()
+          : undefined,
+      }),
+    },
+  );
+}
+
+export async function createReviewCheckRun(
+  owner: string,
+  repo: string,
+  sha: string,
+  accessToken: string,
+): Promise<number> {
+  const response = await githubRequest<{ id: number }>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check-runs`,
+    accessToken,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "AI PR Reviewer",
+        head_sha: sha,
+        status: "in_progress",
+        started_at: new Date().toISOString(),
+        details_url: process.env.NEXTAUTH_URL
+          ? new URL("/dashboard", process.env.NEXTAUTH_URL).toString()
+          : undefined,
+      }),
+    },
+  );
+  return response.id;
+}
+
+export async function completeReviewCheckRun(
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  accessToken: string,
+  review: StructuredReview,
+  blockOnCritical: boolean,
+): Promise<void> {
+  const hasCritical = review.findings.some((finding) => finding.severity === "critical");
+  await githubRequest(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check-runs/${checkRunId}`,
+    accessToken,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        conclusion: hasCritical && blockOnCritical ? "failure" : "success",
+        completed_at: new Date().toISOString(),
+        output: {
+          title: review.findings.length === 0
+            ? "No problems found"
+            : `${review.findings.length} issue${review.findings.length === 1 ? "" : "s"} found`,
+          summary: review.summary,
+          annotations: review.findings
+            .filter((finding) => finding.path && finding.line)
+            .slice(0, 50)
+            .map((finding) => ({
+              path: finding.path,
+              start_line: finding.line,
+              end_line: finding.line,
+              annotation_level: finding.severity === "critical" || finding.severity === "high"
+                ? "failure"
+                : finding.severity === "medium" ? "warning" : "notice",
+              title: finding.title,
+              message: `${finding.problem}\n\nFix: ${finding.fix}`.slice(0, 64_000),
+            })),
+        },
+      }),
+    },
+  );
+}
+
+export async function failReviewCheckRun(
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  accessToken: string,
+): Promise<void> {
+  await githubRequest(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check-runs/${checkRunId}`,
+    accessToken,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        conclusion: "neutral",
+        completed_at: new Date().toISOString(),
+        output: {
+          title: "Review could not finish",
+          summary: "Open the AI PR Reviewer dashboard and try the review again.",
+        },
+      }),
+    },
+  );
 }

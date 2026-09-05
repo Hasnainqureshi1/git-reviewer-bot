@@ -6,8 +6,8 @@ import { upsertGitHubUser } from "@/lib/database";
 export const authOptions: NextAuthOptions = {
   providers: [
     GitHubProvider({
-      clientId: process.env.GITHUB_CLIENT_ID ?? "",
-      clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
+      clientId: process.env.GITHUB_APP_CLIENT_ID ?? process.env.GITHUB_CLIENT_ID ?? "",
+      clientSecret: process.env.GITHUB_APP_CLIENT_SECRET ?? process.env.GITHUB_CLIENT_SECRET ?? "",
       authorization: {
         params: { scope: "read:user user:email repo admin:repo_hook" },
       },

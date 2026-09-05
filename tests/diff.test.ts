@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chunkDiff } from "../lib/diff";
+import { chunkDiff, filterIgnoredPaths } from "../lib/diff";
 
 describe("chunkDiff", () => {
   it("splits on line boundaries when possible", () => {
@@ -18,5 +18,33 @@ describe("chunkDiff", () => {
 
   it("returns a reviewable placeholder for an empty diff", () => {
     expect(chunkDiff("").chunks).toEqual(["(empty diff)"]);
+  });
+});
+
+describe("filterIgnoredPaths", () => {
+  it("removes ignored file sections from a unified diff", () => {
+    const diff = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "+keep",
+      "diff --git a/dist/app.js b/dist/app.js",
+      "+ignore",
+    ].join("\n");
+
+    const filtered = filterIgnoredPaths(diff, ["dist/*"]);
+    expect(filtered).toContain("src/app.ts");
+    expect(filtered).not.toContain("dist/app.js");
+  });
+
+  it("supports recursive glob patterns", () => {
+    const diff = [
+      "diff --git a/generated/api/client.ts b/generated/api/client.ts",
+      "+ignore",
+      "diff --git a/src/client.ts b/src/client.ts",
+      "+keep",
+    ].join("\n");
+
+    const filtered = filterIgnoredPaths(diff, ["generated/**"]);
+    expect(filtered).not.toContain("generated/api/client.ts");
+    expect(filtered).toContain("src/client.ts");
   });
 });

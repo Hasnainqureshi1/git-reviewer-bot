@@ -1,16 +1,23 @@
-import { AlertTriangle, CheckCircle2, GitPullRequest, Send } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Gauge, GitPullRequest, Send } from "lucide-react";
 import Image from "next/image";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
 import { Brand } from "@/components/brand";
+import { AccountDangerZone } from "@/components/account-danger-zone";
 import { RepoManager } from "@/components/repo-manager";
 import { ReviewHistory } from "@/components/review-history";
 import { SignOutButton } from "@/components/sign-out-button";
 import { authOptions } from "@/lib/auth";
-import { getConnectedRepos, getGitHubTokenForUser, getRecentReviews } from "@/lib/database";
+import {
+  getConnectedRepos,
+  getGitHubTokenForUser,
+  getRecentReviews,
+  getReviewUsageSince,
+} from "@/lib/database";
 import { listGitHubRepositories } from "@/lib/github";
 import { latestReviewAttempts } from "@/lib/reviews";
+import { parseStoredReview } from "@/lib/structured-review";
 import type { ConnectedRepo, GitHubRepository, ReviewRecord } from "@/types";
 
 export const metadata = { title: "Dashboard" };
@@ -24,16 +31,24 @@ export default async function DashboardPage() {
   let repositories: GitHubRepository[] = [];
   let reviews: ReviewRecord[] = [];
   let loadError: string | null = null;
+  let dailyUsage = 0;
+  let dailyTokens = 0;
 
   try {
-    const [connectedResult, reviewsResult, token] = await Promise.all([
+    const [connectedResult, reviewsResult, token, usageResult] = await Promise.all([
       getConnectedRepos(session.user.id),
       getRecentReviews(session.user.id),
       getGitHubTokenForUser(session.user.id),
+      getReviewUsageSince(
+        session.user.id,
+        new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+      ),
     ]);
     connected = connectedResult;
     reviews = reviewsResult;
     repositories = await listGitHubRepositories(token);
+    dailyUsage = usageResult.reviews;
+    dailyTokens = usageResult.estimatedTokens;
   } catch (error) {
     console.error("Dashboard data failed to load", error);
     loadError = "Dashboard data could not be loaded. Please refresh and try again.";
@@ -42,7 +57,10 @@ export default async function DashboardPage() {
   const latestReviews = latestReviewAttempts(reviews);
 
   const awaitingApproval = latestReviews.filter(
-    (review) => review.status === "completed" && !review.comment_url,
+    (review) =>
+      review.status === "completed" &&
+      !review.comment_url &&
+      Boolean(parseStoredReview(review.ai_response)?.findings.length),
   ).length;
   const published = latestReviews.filter(
     (review) => review.status === "completed" && Boolean(review.comment_url),
@@ -99,11 +117,12 @@ export default async function DashboardPage() {
           </div>
         )}
 
-        <section className="mt-8 grid gap-4 sm:grid-cols-3">
+        <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
             ["Repositories", connected.length, GitPullRequest, "Connected to GitHub"],
             ["Awaiting approval", awaitingApproval, Send, "Ready for your decision"],
             ["Published", published, CheckCircle2, "Posted to GitHub"],
+            ["Daily usage", dailyUsage, Gauge, `~${dailyTokens.toLocaleString()} tokens · limit ${process.env.DAILY_REVIEW_LIMIT ?? "50"}`],
           ].map(([label, value, Icon, note]) => {
             const StatIcon = Icon as typeof GitPullRequest;
             return (
@@ -128,6 +147,8 @@ export default async function DashboardPage() {
 
           <ReviewHistory initialReviews={latestReviews} />
         </div>
+
+        <AccountDangerZone />
       </div>
     </main>
   );

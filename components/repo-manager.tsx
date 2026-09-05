@@ -8,12 +8,16 @@ import {
   Lock,
   Plus,
   Search,
+  Save,
+  Settings2,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import type { ConnectedRepo, GitHubRepository } from "@/types";
+import { getRepoSettings } from "@/lib/repo-settings";
+import type { RepoSettings } from "@/types";
 
 export function RepoManager({
   initialConnected,
@@ -28,6 +32,10 @@ export function RepoManager({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null);
+  const [settingsDrafts, setSettingsDrafts] = useState<Record<string, RepoSettings>>(() =>
+    Object.fromEntries(initialConnected.map((repo) => [repo.id, getRepoSettings(repo)])),
+  );
   const connectedIds = useMemo(() => new Set(connected.map((repo) => repo.github_repo_id)), [connected]);
   const available = repositories.filter(
     (repo) =>
@@ -76,6 +84,35 @@ export function RepoManager({
     } finally {
       setBusy(null);
     }
+  }
+
+  async function saveSettings(repo: ConnectedRepo) {
+    const settings = settingsDrafts[repo.id] ?? getRepoSettings(repo);
+    setBusy(`settings:${repo.id}`);
+    setError(null);
+    try {
+      const response = await fetch(`/api/repos/${repo.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      const body = (await response.json()) as { repository?: ConnectedRepo; error?: string };
+      if (!response.ok || !body.repository) throw new Error(body.error ?? "Could not save settings");
+      setConnected((current) => current.map((item) => item.id === repo.id ? body.repository! : item));
+      setSettingsRepoId(null);
+      router.refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save settings");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function updateSettings(repo: ConnectedRepo, changes: Partial<RepoSettings>) {
+    setSettingsDrafts((current) => ({
+      ...current,
+      [repo.id]: { ...(current[repo.id] ?? getRepoSettings(repo)), ...changes },
+    }));
   }
 
   return (
@@ -161,8 +198,11 @@ export function RepoManager({
             <p className="mt-1 text-xs text-slate-600">Connect one to install its pull request webhook.</p>
           </div>
         ) : (
-          connected.map((repo) => (
-            <div key={repo.id} className="group flex items-center gap-3 px-5 py-4 sm:px-6">
+          connected.map((repo) => {
+            const settings = settingsDrafts[repo.id] ?? getRepoSettings(repo);
+            return (
+            <Fragment key={repo.id}>
+            <div className="group flex items-center gap-3 px-5 py-4 sm:px-6">
               <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.03] text-slate-400">
                 <Github size={17} />
               </span>
@@ -182,6 +222,15 @@ export function RepoManager({
               </span>
               <button
                 type="button"
+                onClick={() => setSettingsRepoId((current) => current === repo.id ? null : repo.id)}
+                aria-label={`Settings for ${repo.full_name}`}
+                title="Review settings"
+                className="rounded-lg p-2 text-slate-600 transition hover:bg-white/[0.05] hover:text-slate-200"
+              >
+                <Settings2 size={16} />
+              </button>
+              <button
+                type="button"
                 onClick={() => void disconnect(repo)}
                 disabled={busy !== null}
                 aria-label={`Disconnect ${repo.full_name}`}
@@ -191,7 +240,92 @@ export function RepoManager({
                 {busy === repo.id ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
               </button>
             </div>
-          ))
+            {settingsRepoId === repo.id && (
+              <div className="border-t border-white/[0.05] bg-black/10 px-5 py-5 sm:px-6">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="text-xs text-slate-500">
+                    Review focus
+                    <select
+                      value={settings.review_mode}
+                      onChange={(event) => updateSettings(repo, { review_mode: event.target.value as RepoSettings["review_mode"] })}
+                      className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-xs text-slate-200 outline-none"
+                    >
+                      <option value="balanced">Balanced</option>
+                      <option value="security">Security</option>
+                      <option value="performance">Performance</option>
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-500">
+                    Minimum severity
+                    <select
+                      value={settings.minimum_severity}
+                      onChange={(event) => updateSettings(repo, { minimum_severity: event.target.value as RepoSettings["minimum_severity"] })}
+                      className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-xs text-slate-200 outline-none"
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="mt-4 block text-xs text-slate-500">
+                  Ignore paths (comma separated)
+                  <input
+                    value={settings.ignored_paths.join(", ")}
+                    onChange={(event) => updateSettings(repo, {
+                      ignored_paths: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+                    })}
+                    placeholder="package-lock.json, dist/*, generated/*"
+                    className="mt-1.5 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2.5 text-xs text-slate-200 outline-none"
+                  />
+                </label>
+                <label className="mt-4 block text-xs text-slate-500">
+                  Custom instructions
+                  <textarea
+                    value={settings.custom_instructions}
+                    onChange={(event) => updateSettings(repo, { custom_instructions: event.target.value })}
+                    rows={3}
+                    placeholder="Example: Check API input validation carefully."
+                    className="mt-1.5 w-full resize-y rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2.5 text-xs leading-5 text-slate-200 outline-none"
+                  />
+                </label>
+                <div className="mt-4 flex flex-col gap-3 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-5">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={settings.auto_review}
+                        onChange={(event) => updateSettings(repo, { auto_review: event.target.checked })}
+                        className="accent-emerald-300"
+                      />
+                      Review new PR updates
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={settings.block_on_critical}
+                        onChange={(event) => updateSettings(repo, { block_on_critical: event.target.checked })}
+                        className="accent-emerald-300"
+                      />
+                      Fail status on critical issues
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void saveSettings(repo)}
+                    disabled={busy !== null}
+                    className="flex items-center justify-center gap-2 rounded-lg bg-emerald-300 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:opacity-60"
+                  >
+                    {busy === `settings:${repo.id}` ? <LoaderCircle className="animate-spin" size={14} /> : <Save size={14} />}
+                    Save settings
+                  </button>
+                </div>
+              </div>
+            )}
+            </Fragment>
+            );
+          })
         )}
       </div>
     </section>

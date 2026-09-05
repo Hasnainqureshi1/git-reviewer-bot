@@ -1,4 +1,34 @@
 export type ReviewStatus = "pending" | "completed" | "failed";
+export type ReviewSeverity = "critical" | "high" | "medium" | "low";
+export type ReviewMode = "balanced" | "security" | "performance";
+
+export interface ReviewFinding {
+  id: string;
+  severity: ReviewSeverity;
+  title: string;
+  path: string | null;
+  line: number | null;
+  problem: string;
+  impact: string;
+  fix: string;
+  suggested_code: string | null;
+  language: string | null;
+}
+
+export interface StructuredReview {
+  version: 1;
+  summary: string;
+  findings: ReviewFinding[];
+}
+
+export interface RepoSettings {
+  review_mode: ReviewMode;
+  minimum_severity: ReviewSeverity;
+  ignored_paths: string[];
+  custom_instructions: string;
+  auto_review: boolean;
+  block_on_critical: boolean;
+}
 
 export interface GitHubRepository {
   id: number;
@@ -28,6 +58,13 @@ export interface ConnectedRepo {
   default_branch: string;
   webhook_id: number | null;
   webhook_active: boolean;
+  github_installation_id?: number | null;
+  review_mode?: ReviewMode;
+  minimum_severity?: ReviewSeverity;
+  ignored_paths?: string[];
+  custom_instructions?: string;
+  auto_review?: boolean;
+  block_on_critical?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +82,11 @@ export interface ReviewRecord {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  review_mode?: ReviewMode;
+  attempt_count?: number;
+  head_sha?: string | null;
+  input_characters?: number;
+  output_characters?: number;
   repos?: Pick<ConnectedRepo, "full_name"> | null;
 }
 
@@ -60,5 +102,6 @@ export interface PullRequestWebhookPayload {
     number: number;
     title: string;
     html_url: string;
+    head: { sha: string };
   };
 }

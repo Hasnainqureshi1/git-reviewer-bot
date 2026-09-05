@@ -2,13 +2,19 @@ import { getServerSession } from "next-auth";
 import { z } from "zod";
 
 import { authOptions } from "@/lib/auth";
-import { connectRepository, getConnectedRepos, getGitHubTokenForUser } from "@/lib/database";
+import {
+  connectRepository,
+  getConnectedRepos,
+  getGitHubTokenForUser,
+  logAuditEvent,
+} from "@/lib/database";
 import { requireEnv } from "@/lib/env";
 import {
   createOrUpdateWebhook,
   GitHubApiError,
   listGitHubRepositories,
 } from "@/lib/github";
+import { findGitHubAppInstallation } from "@/lib/github-app";
 
 const connectSchema = z.object({
   fullName: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "Choose a valid repository"),
@@ -69,14 +75,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const webhookId = await createOrUpdateWebhook(
+    const installationId = await findGitHubAppInstallation(
       repository.owner.login,
       repository.name,
-      accessToken,
-      callbackUrl,
-      requireEnv("GITHUB_WEBHOOK_SECRET"),
     );
-    const connected = await connectRepository(session.user.id, repository, webhookId);
+    const webhookId = installationId
+      ? null
+      : await createOrUpdateWebhook(
+          repository.owner.login,
+          repository.name,
+          accessToken,
+          callbackUrl,
+          requireEnv("GITHUB_WEBHOOK_SECRET"),
+        );
+    const connected = await connectRepository(
+      session.user.id,
+      repository,
+      webhookId,
+      installationId,
+    );
+
+    await logAuditEvent({
+      userId: session.user.id,
+      action: "repository.connected",
+      targetType: "repository",
+      targetId: connected.id,
+      metadata: { fullName: connected.full_name },
+    });
 
     return Response.json({ connected }, { status: 201 });
   } catch (error) {
