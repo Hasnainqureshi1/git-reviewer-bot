@@ -180,20 +180,51 @@ export async function createPendingReview(input: {
 export async function completeReview(
   reviewId: string,
   aiResponse: string,
-  commentUrl: string,
 ): Promise<void> {
   const { error } = await getSupabaseAdmin()
     .from("reviews")
     .update({
       status: "completed",
       ai_response: aiResponse,
-      comment_url: commentUrl,
+      comment_url: null,
       error_message: null,
       completed_at: new Date().toISOString(),
     })
     .eq("id", reviewId);
 
   if (error) throw new Error(`Could not complete review record: ${error.message}`);
+}
+
+export async function getReviewForPublishing(
+  reviewId: string,
+  userId: string,
+): Promise<{ review: ReviewRecord; repo: ConnectedRepo; accessToken: string } | null> {
+  const { data: review, error } = await getSupabaseAdmin()
+    .from("reviews")
+    .select("*")
+    .eq("id", reviewId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Could not load review: ${error.message}`);
+  if (!review) return null;
+
+  const repo = await getConnectedRepoForUser(review.repo_id, userId);
+  if (!repo) return null;
+
+  return {
+    review: review as ReviewRecord,
+    repo,
+    accessToken: await getGitHubTokenForUser(userId),
+  };
+}
+
+export async function markReviewPublished(reviewId: string, commentUrl: string): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("reviews")
+    .update({ comment_url: commentUrl })
+    .eq("id", reviewId);
+
+  if (error) throw new Error(`Could not save published comment: ${error.message}`);
 }
 
 export async function failReview(reviewId: string, reason: string): Promise<void> {

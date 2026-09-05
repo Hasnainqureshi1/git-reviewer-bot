@@ -1,6 +1,6 @@
 # AI PR Reviewer
 
-AI PR Reviewer connects to GitHub repositories, receives signed pull request webhooks, asks Gemini to review the changed code, and posts the result back to the PR. Its dashboard tracks repository connections and recent review status.
+AI PR Reviewer connects to GitHub repositories, receives signed pull request webhooks, asks Gemini to review the changed code, and puts the findings in an approval dashboard. A maintainer decides when to post the review back to the PR.
 
 ## What is included
 
@@ -11,7 +11,7 @@ AI PR Reviewer connects to GitHub repositories, receives signed pull request web
 - Background review processing with bounded, line-aware diff chunks
 - Gemini retry handling and GitHub rate-limit feedback
 - Supabase schema with RLS denying direct client access
-- Responsive dashboard and review history
+- Responsive findings dashboard with manual GitHub publishing
 - Unit tests for signature verification and diff chunking
 
 ## 1. Install and configure
@@ -93,14 +93,15 @@ GitHub pull_request webhook
   → return 202 and process in the response lifecycle
   → fetch authenticated PR diff
   → chunk and review with Gemini
-  → post an issue comment on the PR
-  → mark the history row completed (or failed)
+  → save findings for maintainer approval
+  → maintainer clicks Post to GitHub
+  → publish the approved issue comment on the PR
 ```
 
 ## Important operational notes
 
 - Rotating `TOKEN_ENCRYPTION_KEY` requires re-authenticating all users unless stored tokens are re-encrypted first.
 - Rotating `GITHUB_WEBHOOK_SECRET` requires reconnecting repositories so GitHub receives the new secret.
-- The database uses a unique GitHub delivery ID to avoid duplicate comments when a delivery is retried.
+- The database uses a unique GitHub delivery ID to avoid duplicate reviews when a delivery is retried.
 - Disconnecting a repository removes its GitHub webhook and cascades its local review history.
-- AI output can be wrong. The posted comment explicitly tells developers to verify suggestions.
+- AI output can be wrong, so findings are never posted until a maintainer explicitly approves them.
